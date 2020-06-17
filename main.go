@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"time"
+
+	"github.com/go-resty/resty"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -17,32 +18,36 @@ import (
 var awsRegion = os.Getenv("REGION")
 var quereURL = os.Getenv("SQS_URL")
 var svc = sqs.New(session.New(), aws.NewConfig().WithRegion(awsRegion))
+var jokeEndpoint = "https://us-central1-kivson.cloudfunctions.net/charada-aleatoria"
+var client = resty.New()
 
 func main() {
-	fmt.Printf("Generated service")
 	lambda.Start(router)
 }
 
 func router(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	if req.Path == "/users" {
+	if req.Path == "/joke" {
 		if req.HTTPMethod == "GET" {
-			message := fmt.Sprintf("This is only a register of a GET request (%s)", time.Now())
-			insertDataToSqs(message)
-			return successAPIGatewayResponse()
-		}
-
-		if req.HTTPMethod == "POST" {
-			var user user
-			err := json.Unmarshal([]byte(req.Body), &user)
-
+			resp, err := client.R().SetHeader("Accept", "application/json").Get(jokeEndpoint)
 			if err != nil {
-				return errorAPIGatewayResponse(http.StatusBadRequest, http.StatusText(http.StatusBadRequest))
+				return errorAPIGatewayResponse(http.StatusNotFound, err.Error())
 			}
 
-			message := fmt.Sprintf("Sending post message to the lambda with user %s", user.Name)
-			insertDataToSqs(message)
+			joke := &joke{}
+			json.Unmarshal(resp.Body(), joke)
+
+			insertDataToSqs(string(resp.Body()))
+			// time.Sleep(3 * time.Second)
+
+			// response, err := svc.ReceiveMessage(&sqs.ReceiveMessageInput{
+			// 	QueueUrl:              aws.String(quereURL),
+			// 	MessageAttributeNames: []*string{aws.String("All")},
+			// 	MaxNumberOfMessages:   aws.Int64(10),
+			// })
+			// fmt.Println(response.Messages)
 
 			return successAPIGatewayResponse()
+
 		}
 	}
 
@@ -69,15 +74,24 @@ func errorAPIGatewayResponse(status int, body string) (events.APIGatewayProxyRes
 
 func insertDataToSqs(message string) {
 	fmt.Println("Inserting data to sqs")
+	attribute := &sqs.MessageAttributeValue{
+		DataType:    aws.String("String"),
+		StringValue: aws.String("teste"),
+	}
+	mapAttributes := make(map[string]*sqs.MessageAttributeValue)
+	mapAttributes["key"] = attribute
+
 	sqsMessage := &sqs.SendMessageInput{
-		MessageBody: aws.String(message),
-		QueueUrl:    aws.String(quereURL),
+		MessageBody:       aws.String(message),
+		QueueUrl:          aws.String(quereURL),
+		MessageAttributes: mapAttributes,
 	}
 
 	svc.SendMessage(sqsMessage)
 }
 
-type user struct {
-	Name  string `json:Name`
-	email string `json:email`
+type joke struct {
+	ID       int    `json:id`
+	Pergunta string `json:pergunta`
+	Resposta string `json:resposta`
 }
